@@ -26,6 +26,17 @@
 
 每讲完成后上传一份 PDF，文件名为 `ai-agent-note-N.pdf`。
 
+## 实验记录
+
+跟着主教材的[配套代码](https://github.com/bojieli/ai-agent-book)动手做的实验，每个实验一个文件夹，内含实验报告（`README.md`）和我自己跑出的结果文件。
+
+| 编号 | 实验 | 核心结论 | 模型 | 报告 |
+|---|---|---|---|---|
+| 1-1 | 上下文消融：依次拿掉历史、推理、工具定义、工具结果，比较 Agent 行为 | 模型无状态，上下文就是程序每轮重组的消息列表；`completed` ≠ 答对 ≠ 数字有依据，交出看似可信的编造数字是最危险的失败 | deepseek-v4-flash | [experiments/chapter1/1-1](experiments/chapter1/1-1/) |
+| 1-2 | Web 搜索 Agent | 待更新 | | |
+| 1-3 | 搜索 + 代码执行 | 待更新 | | |
+| 1-4 | 图像生成：工作流 vs 原生 | 待更新 | | |
+
 ## 目录结构
 
 ```
@@ -34,6 +45,7 @@ chapters/             各章正文，每讲一个 .tex 文件
 elegantbook.cls       ElegantBook v4.7 模板类文件
 LATEX-CHEATSHEET.md   本模板的 LaTeX 语法速查
 ai-agent-note-N.pdf   每讲编译好的笔记
+experiments/          动手实验：按 chapterN/编号 分文件夹，每个含报告 README.md 和 results/
 ```
 
 ## 自己编译
