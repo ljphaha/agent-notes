@@ -1,0 +1,16 @@
+# LaTeX 编译中间文件
+*.aux
+*.bcf
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.xdv
+
+# 编辑器
+.vscode/

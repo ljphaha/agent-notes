@@ -1,0 +1,32 @@
+% !TeX program = xelatex
+\PassOptionsToPackage{fontset=fandol}{ctex}
+\documentclass[lang=cn,scheme=chinese,color=blue,mode=fancy,oneside,11pt]{elegantbook}
+
+\title{AI Agent 课程笔记}
+\hypersetup{pdftitle={AI Agent 课程笔记},colorlinks=true,linkcolor=structurecolor}
+\setcounter{tocdepth}{1}
+
+\lstdefinestyle{agentpython}{
+  language=Python,
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{structurecolor!5},
+  keywordstyle=\color{structurecolor}\bfseries,
+  commentstyle=\color{black!55}\itshape,
+  stringstyle=\color{teal!75!black},
+  showstringspaces=false,
+  frame=single,
+  rulecolor=\color{structurecolor!25},
+  framesep=6pt,
+  breaklines=true,
+  columns=fullflexible
+}
+
+\begin{document}
+
+% 有多章时，可以取消下一行的注释以生成目录。
+% \tableofcontents
+
+\input{chapters/01-agent-basics}
+% \input{chapters/02-context-engineering}
+
+\end{document}
