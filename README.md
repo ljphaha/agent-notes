@@ -33,7 +33,7 @@
 | 编号 | 实验 | 核心结论 | 模型 | 报告 |
 |---|---|---|---|---|
 | 1-1 | 上下文消融：依次拿掉历史、推理、工具定义、工具结果，比较 Agent 行为 | 模型无状态，上下文就是程序每轮重组的消息列表；`completed` ≠ 答对 ≠ 数字有依据，交出看似可信的编造数字是最危险的失败 | deepseek-v4-flash | [experiments/chapter1/1-1](experiments/chapter1/1-1/) |
-| 1-2 | Web 搜索 Agent | 待更新 | | |
+| 1-2 | Web 搜索 Agent：离线演示读懂 ReAct 轨迹，再用 Moonshot 服务端 `web_search` 真实联网问答 | ReAct 的"想→做→看"就是消息列表循环；服务端工具的观察结果是加密的，程序无法做 grounding 检查，答案只能靠外部独立核实 | kimi-k3 | [experiments/chapter1/1-2](experiments/chapter1/1-2/) |
 | 1-3 | 搜索 + 代码执行 | 待更新 | | |
 | 1-4 | 图像生成：工作流 vs 原生 | 待更新 | | |
 
