@@ -16,7 +16,7 @@
 | 讲 | 主题 | PDF |
 |---|---|---|
 | 1 | Agent、工作流与 Harness：谁决定下一步、工具调用怎么发生、Harness 五要素、上下文的组成与 ReAct 轨迹 | [ai-agent-note-1.pdf](ai-agent-note-1.pdf) |
-| 2 | 固定流水线、BM25 与多跳检索 | 待更新 |
+| 2 | 固定流水线、BM25 与多跳检索：把一次调用写成规格说明、防御式解析、多次调用的分工、RAG 与 BM25、倒排索引与检索评价、多跳检索 | [ai-agent-note-2.pdf](ai-agent-note-2.pdf) |
 | 3 | 工具协议与 Agent 循环 | 待更新 |
 | 4 | 文档工具、终端与上下文管理 | 待更新 |
 | 5 | 跨会话记忆、用户审批与防注入 | 待更新 |
@@ -40,7 +40,8 @@
 ## 目录结构
 
 ```
-main.tex              主文件：版式设置，并用 \input 引入各章
+preamble.tex          各讲共用的版式设置（字体、配色、代码样式）
+ai-agent-note-N.tex   第 N 讲的主文件：引入 preamble 和对应的一章，单独编译出一份 PDF
 chapters/             各章正文，每讲一个 .tex 文件
 elegantbook.cls       ElegantBook v4.7 模板类文件
 LATEX-CHEATSHEET.md   本模板的 LaTeX 语法速查
@@ -53,10 +54,10 @@ experiments/          动手实验：按 chapterN/编号 分文件夹，每个�
 需要 XeLaTeX（TeX Live 或 MiKTeX，带 ctex 中文支持）。在仓库根目录运行：
 
 ```sh
-xelatex -no-shell-escape -interaction=nonstopmode -halt-on-error main.tex
+xelatex -no-shell-escape -interaction=nonstopmode -halt-on-error ai-agent-note-2.tex
 ```
 
-新增章节、引用或目录后，再运行一次以更新页码和链接。模板里各种环境和命令的写法见 [LATEX-CHEATSHEET.md](LATEX-CHEATSHEET.md)。
+把文件名里的数字换成要编译的那一讲。每讲单独编译，生成同名的 PDF。新增章节、引用或目录后，再运行一次以更新页码和链接。模板里各种环境和命令的写法见 [LATEX-CHEATSHEET.md](LATEX-CHEATSHEET.md)。
 
 ## 致谢与许可
 

@@ -1,3 +1,4 @@
+% !TEX root = ../ai-agent-note-1.tex
 \chapter{Agent,工作流和Harness}
 
 \section{谁决定下一步：工作流与 Agent}
@@ -14,7 +15,7 @@ LLM 是大脑，负责做决策；上下文是眼睛，决定模型这一步能�
 用代码解释:
 
 \textbf{1.工作流：}控制流写在代码里，LLM 只是某个函数内部的一次调用。
-\begin{lstlisting}[style=agentpython, caption={工作流}, label={lst:loop}]
+\begin{lstlisting}[style=agentpython, caption={工作流}, label={lst:workflow}]
   def book_flight(req):
     user = verify_identity(req)
     flights = search_flights(req)   # 这里面可以调 LLM
@@ -23,7 +24,7 @@ LLM 是大脑，负责做决策；上下文是眼睛，决定模型这一步能�
 \end{lstlisting}
 
 \textbf{2.Agent:}控制流变成了模型在运行时吐出来的数据。代码只剩一个循环，每一圈都问模型：“下一步做什么？”
-\begin{lstlisting}[style=agentpython, caption={agent}, label={lst:loop}]
+\begin{lstlisting}[style=agentpython, caption={agent}, label={lst:agent-loop}]
   while True:
     action = llm(context)           # 由模型决定下一步
     if action.is_final:

@@ -1,0 +1,35 @@
+% 所有讲的笔记共用的导言区（版式设置）。每讲的主文件用 \input{preamble} 引入。
+\PassOptionsToPackage{fontset=fandol}{ctex}
+\documentclass[lang=cn,scheme=chinese,color=blue,mode=fancy,oneside,11pt]{elegantbook}
+
+\setcounter{tocdepth}{1}
+
+\lstdefinestyle{agentpython}{
+  language=Python,
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{structurecolor!5},
+  keywordstyle=\color{structurecolor}\bfseries,
+  commentstyle=\color{black!55}\itshape,
+  stringstyle=\color{teal!75!black},
+  showstringspaces=false,
+  frame=single,
+  rulecolor=\color{structurecolor!25},
+  framesep=6pt,
+  breaklines=true,
+  columns=fullflexible
+}
+
+% 纯文本代码块（Markdown、提示词格式等）：不按 Python 高亮，避免 # 开头的行被当成注释
+\lstdefinestyle{agenttext}{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{structurecolor!5},
+  showstringspaces=false,
+  frame=single,
+  rulecolor=\color{structurecolor!25},
+  framesep=6pt,
+  breaklines=true,
+  columns=fullflexible
+}
+
+% 段内小标题：加粗、不缩进、上方留一点空，正文另起一段
+\newcommand{\keypoint}[1]{\par\medskip\noindent\textbf{#1}\par\nobreak\smallskip}
