@@ -40,6 +40,7 @@ from cs329z_hw1.types import (
     ToolSpec
 )
 import cs329z_hw1.pipelines.priority as priority
+import cs329z_hw1.pipelines.digest as digest
 # ======================================================================
 # Part 1: LLM pipelines
 # ======================================================================
@@ -79,7 +80,7 @@ def run_daily_digest(emails: list[Email], lm: LMCallable) -> str:
       site that email is about; it contains no term listed for the gold
       ignore emails.
     """
-    raise NotImplementedError
+    return digest.digest_emails(emails, lm)
 
 
 def run_bm25_build(docs: list[str]) -> Any:
