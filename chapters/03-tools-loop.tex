@@ -1,0 +1,412 @@
+% !TEX root = ../ai-agent-note-3.tex
+\chapter{工具协议与 Agent 循环}
+
+\section{工具注册与工具设计}
+模型的短板分成三类，每类都对应一种工具：
+\begin{table}[H]
+\centering
+\caption{模型的三类短板与对应的工具}
+\label{tab:why-tools}
+\begin{tabular}{p{2cm} p{7cm} p{6cm}}
+  \toprule
+  模型的短板 & 例子 & 用什么工具补 \\
+  \midrule
+  \textbf{算不了} & 大规模算术、多步逻辑推导、需要精确可验证的操作 & 计算器、代码解释器、求解器 \\
+  \textbf{没见过} & 长尾事实、训练截止之后的事、私有数据 & 网页搜索、检索（RAG） \\
+  \textbf{够不着} & API、数据库这类非语言接口；物理世界；实时状态（时间、价格） & 函数调用、MCP、浏览器、时钟 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{工具是什么：从 API 到 MCP}
+% 3.1-A：为什么需要工具、三代标准接口、工具的组成
+\begin{definition}{工具是啥}
+   工具是一个在模型外部运行的程序的函数接口；模型负责生成函数调用和参数，以此来使用这个工具。 
+\end{definition}
+\textbf{工具演变：}
+\begin{table}[H]
+\centering
+\caption{工具接口的三代演进}
+
+\label{tab:tool-interfaces}
+\begin{tabular}{p{2.6cm} p{3.6cm} p{4.2cm} p{4.2cm}}
+  \toprule
+   & REST API & 函数调用（Function Calling） & MCP \\
+  \midrule
+  面向谁       & 人 & 模型 & 整个生态 \\
+  怎么描述工具 & 接口文档，写给人看 & 每个工具一份JSON Schema & 一套统一协议，服务器自己列出有哪些工具 \\
+  模型要做什么 & 读文档，自己拼请求 & 输出工具名加参数 & 同左 \\
+  局限         & 没有机器可读的合约 & 工具定义写死在各自代码里，换个平台要重写 & — \\
+  \bottomrule
+\end{tabular}
+\end{table}
+\begin{definition}{MCP（Model Context Protocol，模型上下文协议}
+    MCP把工具从各家代码里抽出来，做成独立的服务器。任何支持 MCP 的应用（Claude Code、Cursor 等）都能接进来用。只有两个核心动作：
+    \begin{itemize}
+      \item \texttt{tools/list}：问服务器“你有哪些工具？”服务器返回每个工具的名字、描述和 inputSchema
+      \item \texttt{tools/call}：说“用这些参数运行这个工具”，服务器返回结果，由宿主应用交给模型。
+    \end{itemize}
+\end{definition}
+
+\subsection{工具注册表：校验与执行分开}
+% 3.1-A：注册表的三个方法、四种结果状态
+工具多了，就需要一个注册表统一管理。它要提供三个能力：
+\begin{lstlisting}[style=agentpython]
+schemas()             → 把所有工具的“名字 + 描述 + 参数格式”交给模型看
+validate(name, args)  → 只检查：有没有这个工具？参数符不符合格式？不执行
+execute(name, args)   → 先校验，再执行，永远返回一个结果，永远不抛异常
+\end{lstlisting}
+调用的结果有五种状态：
+\begin{table}[H]
+\centering
+\caption{一次工具调用的结果状态}
+\label{tab:tool-status}
+\begin{tabular}{p{3.2cm} p{7.5cm} p{4cm}}
+  \toprule
+  状态 & 意思 & 执行函数被调用了吗 \\
+  \midrule
+  \texttt{ok}           & 成功 & 是 \\
+  \texttt{unknown\_tool} & 没有这个名字的工具，比如模型编了一个不存在的工具 & 否 \\
+  \texttt{invalid\_args} & 参数不符合格式：缺字段、类型不对、多了不认识的字段 & \textbf{否} \\
+  \texttt{tool\_error}   & 工具运行时抛了异常 & 是，但出错了 \\
+  \texttt{denied}        & 用户拒绝了这次调用 & 否\\
+  \bottomrule
+\end{tabular}
+\end{table}
+
+为什么永远不抛异常？ 错误信息会作为结果写回上下文，交给模型看。模型看到“参数 city 缺失”，下一轮就能自己改正。
+\subsection{工具设计原则}
+% 3.1-B：ACI、能力的表达形式、工具描述、参数保真、工具使用的失败类型
+今天更成熟的思路叫 ACI（Agent-Computer Interface，Agent 与计算机的接口）
+\begin{tcolorbox}[colback=second!5, colframe=second, title=ACI原则]
+  工具应该对应 Agent 想达成的目标，而不是底层的 API 操作。
+\end{tcolorbox}
+能力的表达形式分为两种:\textbf{1.专用工具}，\textbf{2.通用执行器+skill}
+\begin{table}[H]
+\centering
+\caption{专用工具与通用执行器 + Skill}
+\label{tab:tool-forms}
+\begin{tabular}{p{1.6cm} p{6.4cm} p{6.6cm}}
+  \toprule
+   & 专用工具 & 通用执行器 + Skill \\
+  \midrule
+  形式 & 结构化的函数调用，参数受 schema 约束 & 自然语言写的操作说明，Agent 用终端或代码解释器去执行 \\
+  优点 & 确定性高、可测试、参数不容易传错 & 少量通用工具就能覆盖大量场景；不懂编程的人也能写、能改 \\
+  代价 & 每个工具的定义要占几百个 token；改动要改代码、测试、部署 & 模型要自己拼命令行参数、处理转义，参数一复杂就容易出错 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+
+默认通用工具优于专用工具，因为模型本身有很强的思考和写代码能力，应该利用这种能力，而不是限制它。什么时候退回专用工具，需要考虑四个维度：
+\begin{table}[H]
+\centering
+\caption{选择能力表达形式的四个维度}
+\label{tab:tool-form-dimensions}
+\begin{tabular}{p{2.6cm} p{5.6cm} p{6.4cm}}
+  \toprule
+  维度 & 倾向专用工具 & 倾向 Skill / 通用执行器 \\
+  \midrule
+  安全与权限 & 需要精细授权、审计，或有不可逆风险 & 其余情况 \\
+  参数复杂度 & 嵌套、多字段联合校验 & 参数简单 \\
+  变更频率   & 稳定的底层操作 & 经常变化的流程，改一段文字比改代码轻松 \\
+  模型能力   & 较弱的模型，需要 schema 引导 & 较强的模型 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+\noindent 所以工具描述该怎么写，工具描述的质量直接决定 Agent 用工具用得准不准。五条要点：
+\keypoint{1. 写“什么时候用”，不只写“能做什么”}
+比如\texttt{web\_search}
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+\begin{tabular}{@{}r@{\quad}l@{}}
+  × & \texttt{web\_search}：搜索相关内容 \\
+  √ & \texttt{web\_search}：当需要获取实时信息，或查找你不知道的事实时使用
+\end{tabular}
+\end{tcolorbox}
+前者只描述功能，后者直接帮模型做“要不要调用”的决定。
+\keypoint{2. 写清边界：做不到什么、不接受什么}
+大多数调用失败，不是模型不知道工具能做什么，而是不知道它不能做什么。比如文件搜索工具要写明“只按文件名匹配，不搜索文件内容”，否则模型会自己猜。
+\keypoint{3. 参数用具体例子，不用抽象规范}
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+\begin{tabular}{@{}r@{\quad}l@{}}
+  × & \texttt{phone}：使用 E.164 格式 \\
+  √ & \texttt{phone}：电话号码，E.164 格式（国家代码 + 号码，无空格或特殊字符），\\
+  & 例如 +8613888888888（中国）或 +12025551234（美国）
+\end{tabular}
+\end{tcolorbox}
+模型在复杂任务里同时要处理很多事，只能分出一点注意力确认参数格式。有现成例子可以照抄，就不用多想一步。
+\keypoint{4. 写清返回什么，以及执行代价}
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+\begin{tabular}{@{}r@{：}l@{}}
+  返回格式 & 返回 JSON 数组，每个元素包含 title、url、snippet 三个字段。\\
+  执行代价 & 此工具要下载完整网页，大网站可能需要 5--10 秒；只需要元信息时，请用 \texttt{get\_page\_metadata}。
+\end{tabular}
+\end{tcolorbox}
+\keypoint{5. 附上 1–5 个真实的调用示例}
+JSON Schema 只能描述类型，说不清一些隐含约定，例子最容易传达。
+\begin{tcolorbox}[colback=second!5, colframe=second, title=一个调试原则]
+  Agent 老是选错工具时，先检查工具描述，别急着怀疑模型能力。修描述的投入产出比，通常远高于换一个更强的模型。
+\end{tcolorbox}
+有时候参数传递的保真性也是个问题，这是一个比功能缺失更隐蔽的问题。\\
+
+\textbf{案例 1：静默改写输入。} 某个版本的 Cursor，替换文件内容的工具接收 \verb|old_string| 和 \verb|new_string|。它的参数处理层会悄悄把中文弯引号 “ ” 换成英文直引号 “。结果是：
+
+\begin{itemize}
+  \item 模型读文件，读到的是弯引号（读取工具原样返回）；
+  \item 模型把这段文字原样填进 \verb|old_string|；
+  \item 参数被偷偷改成了直引号，和文件里的内容对不上，工具返回“未找到匹配”；
+  \item 模型反复尝试、反复失败，它想不通为什么找不到自己明明看到的内容\\
+\end{itemize}
+
+\textbf{案例 2：静默注入参数。} 某个 IDE 的 bash 工具，在所有 git commit 命令后面自动追加一个参数，用来标记“这是 AI 生成的提交”。用户的 Git 版本较旧、不支持这个参数时，提交就会报错。模型怎么改提交信息都没用，因为问题根本不在它写的内容里。
+\begin{tcolorbox}[colback=second!5, colframe=second, title=总结一个原则]
+  模型感知到的世界，和工具实际操作的世界，之间不能有系统性的偏差。
+\end{tcolorbox}
+需要规范化输入时（比如统一编码），必须写进工具描述，并且在返回结果里明确告诉模型做了什么转换。否则工具的“好心修正”会变成一个模型自己永远查不出原因的故障。\\
+
+\textbf{最后总结工具使用失败的类型：}
+\begin{table}[H]
+\centering
+\caption{工具使用的失败类型}
+\label{tab:tool-failures}
+\begin{tabular}{p{4.9cm} p{4.9cm} p{4.9cm}}
+  \toprule
+  \textbf{单次调用} & \textbf{多步链条} & \textbf{对话} \\
+  \midrule
+  \textbf{选错工具}：选了错误的工具，或者本不需要工具时调用了 &
+  \textbf{顺序错误}：跳过前置调用，或者顺序不对 &
+  \textbf{违反策略}：在规则不允许的地方采取了行动 \\
+  \addlinespace
+  \textbf{参数错误}：编造字段、类型或单位不对 &
+  \textbf{恢复失败}：一直重试同一个失败的调用，而不是退一步换个做法 &
+  \textbf{不问就猜}：该问用户的时候自己假设 \\
+  \addlinespace
+  \textbf{幻觉工具}：调用一个根本不存在的 API &
+  &
+  \textbf{不稳定}：这次成功、重试就失败（用 $\text{pass}^k$ 衡量） \\
+  \bottomrule
+\end{tabular}
+\end{table}
+% 3.2：没有原生工具调用时怎样设计调用格式
+\section{文本调用协议}
+\subsection{Chat Template定义}
+API里的字段是结构化的JSON，模型只认token序列，这个结构该怎么转化为模型可读的
+
+Chat Template可以把API 的结构化消息转换成一串线性的 token
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+API 消息是信的内容，Chat Template 规定怎样在信封上写明寄件人、收件人：用特殊标记（比如 \texttt{<|im\_start|>system、<|im\_end|>}）划出每条消息的边界和角色。
+\end{tcolorbox}
+工具调用和工具结果也一样，最后都会被包上模型训练时见过的特殊标记，变成文本。所以：
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+原生工具调用 = 服务商替你设计好、并且训练过模型的一套文本协议。
+\end{tcolorbox}
+\subsection{协议的组成部分以及怎么设计格式}
+\begin{lstlisting}[style=agentpython, caption={协议举例}]
+    system = 系统提示词 + 渲染工具(全部工具的 schema)      ← ① 告诉模型有哪些工具、怎么写调用
+    messages = [system, 用户消息]
+    while 没超限:
+        reply = lm(messages)                               ← 文字进，文字出
+        messages.append(reply)
+        parsed = 解析回复(reply)                            ← ② 拆出“说的话”和“调用”
+        if 没有调用:
+            return 最终回答
+        result = 注册表.execute(调用名, 参数)               ← 3.1 的注册表
+        messages.append(按你的格式写好的 result)            ← ④ 工具结果怎么写回
+\end{lstlisting}
+由此可见四部分：
+\begin{table}[htbp]
+  \centering
+  \caption{文本调用协议的四个部分}
+  \label{tab:text-protocol}
+  \begin{tabular}{@{}p{0.25\linewidth}p{0.70\linewidth}@{}}
+    \toprule
+    \textbf{部分} & \textbf{做什么} \\
+    \midrule
+    \circled{1} 渲染工具 &
+      把每个工具的名字、描述、参数格式写进系统提示词，\textbf{并说明调用的写法}，最好附一个调用示例 \\
+    \addlinespace
+    \circled{2} 解析回复 &
+      从回复里拆出两样东西：去掉调用后剩下的文字，以及调用本身（工具名 + 参数）；解析不了就报错 \\
+    \addlinespace
+    \circled{3} 格式化调用 &
+      \circled{2} 的反操作：给定文字和调用，写出一条符合你格式的回复。要求\textbf{解析回来完全一样}，参数类型也不能变 \\
+    \addlinespace
+    \circled{4} 工具结果写回 &
+      工具结果写成什么样子、放进哪条消息 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent\textbf{怎么设计格式：}常见的格式有三种：用代码块包一个 JSON 对象；用 XML 风格的标签把调用包起来；用醒目的分隔标记（DSPy 的做法）。选哪种由你决定，但不管选哪种，解析器都要扛住下面四种极端情况。
+
+\keypoint{1. 一条回复最多一个调用}
+出现两个调用，或者调用写坏了，就报错、不执行，把报错交给循环发回给模型。解析器\textbf{永远不抛异常}。
+
+\keypoint{2. 参数要保持原本的类型}
+\texttt{\{"top\_k": 5\}} 解析回来，\texttt{5} 必须还是整数，不能变成字符串 \texttt{"5"}；布尔值、列表、嵌套对象也一样。这一条直接影响格式的选择：\texttt{search(query=x, top\_k=5)} 这种类函数调用的写法，类型得自己处理；让参数本身就是 JSON，类型就天然保住了。
+
+\keypoint{3. 回复可能在任何位置被截断}
+模型的输出可能被截断。要求是：
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+回复在任意一个字符处被截断，解析结果要么是“没有调用”，要么是完整的原调用；截断发生在参数中间，必须报错。
+\end{tcolorbox}
+绝不能把半截参数当成一次调用去执行。
+
+\keypoint{4. 参数的值可能包含你自己的格式}
+参数值可以是\textbf{任意字符串}，包括一个按你的格式写好的完整调用。比如让 Agent 写一份介绍这个协议的文档，或者转述一封正文里恰好写着调用语法的邮件。解析器如果只是用正则找“第一个开始标记到第一个结束标记”，就会在参数中间提前截断。参数部分应该交给真正的 JSON 解析器去读，而不是用字符串匹配找边界。
+
+\begin{tcolorbox}[colback=second!5, colframe=second, title=总结一个原则]
+  解析器读的是模型写的文字，而模型写的文字可能是任何东西。
+\end{tcolorbox}
+
+\noindent\textbf{工具结果写回哪里：}有原生工具调用时，工具结果放进专门的 \texttt{tool} 角色消息，并带上对应的 \texttt{tool\_call\_id}。只有 user 和 assistant 两种角色时，只能写进 \textbf{user 消息}。写进 assistant 消息不行，模型会以为结果是它自己说的。
+
+写进 user 消息有两个风险：模型可能把工具结果当成新的用户提问（有的模型会因此清掉之前的思考过程）；模型也分不清信息来源，工具结果里混进的指令更容易被当真。补救办法有三条：
+\begin{itemize}
+  \item 用明确的标记包起来，例如 \verb|<tool_result name="search_docs" status="ok"> ... </tool_result>|；
+  \item 在系统提示词里说明：这种块是工具返回的数据，不是用户的指令；
+  \item 带上状态（\texttt{ok}、\texttt{invalid\_args} 等），模型才知道上一步成没成功。
+\end{itemize}
+
+\section{Agent 循环、预算与终止}
+\subsection{Agent 循环：什么时候停}
+% 3.3：循环骨架、终止状态、错误回传、transcript 与上下文
+一个循环骨架包含一个while加一个判断。ReAct 的意思是“边想边做”：模型先想该做什么，再调用工具，再看结果，然后接着想，循环往复。
+\begin{lstlisting}[style=agentpython, caption={ReAct 循环}]
+  trajectory = [user_request]
+  repeat:
+      context = 静态前缀 + trajectory        ← 上下文 = 静态前缀 + 轨迹
+      decision = Model(context)
+      trajectory.append(decision)
+      if decision 没有工具调用:
+          return decision.answer             ← 唯一的“自然”出口
+      for call in decision.tool_calls:
+          observation = 校验并执行(call)       ← 注册表
+          trajectory.append(observation)
+\end{lstlisting}
+模型返回了 \texttt{tool\_calls}，就执行工具、继续循环；没有返回，就输出结果、退出。
+当然只有一个自然出口，即骨架里唯一的出口是“模型不再调用工具”。问题在于，模型可能永远不停。\\
+
+
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+所以，自主 Agent 必须有明确的停止条件，包括任务完成、达到最大迭代次数、遇到不可恢复的错误；否则容易陷入死循环，或者过度执行
+\end{tcolorbox}
+通用的退出状态：
+\begin{table}[H]
+\centering
+\caption{Agent 循环的退出状态}
+\label{tab:loop-status}
+\begin{tabular}{p{2.8cm} p{6.2cm} p{5.6cm}}
+  \toprule
+  状态 & 什么时候出现 & 防的是什么 \\
+  \midrule
+  \texttt{done}          & 模型给出最终回答（没有调用工具） & 正常结束 \\
+  \texttt{max\_turns}    & 模型调用次数达到上限 & 原地打转、永远不停 \\
+  \texttt{token\_budget} & 累计用掉的 token 达到上限 & 成本失控 \\
+  \texttt{malformed}     & \textbf{连续}三次写出坏掉的回复 & 模型反复犯同一个格式错误 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+
+每次调用模型还需要控制预算。
+\begin{lstlisting}[style=agentpython]
+  while True:
+    if 轮数 >= max_turns:      return 状态 max_turns
+    if 已用 token >= budget:   return 状态 token_budget
+    reply = lm(messages)       ← 检查完才调用
+    已用 token += 这次的输入 + 这次的输出
+    ...
+\end{lstlisting}
+
+某次调用让 token 超出了预算，但模型这次刚好给出了最终回答，结果依然算 done。答案已经花钱拿到了，没理由扔掉。
+
+\textbf{token 怎么累计：}每次调用的消耗 = 这次\textbf{完整的} messages + 这次的输出。messages 每轮都在变长，前面的内容每一轮都要重新算一遍，所以总消耗比轮数涨得快（大致是平方关系）。例如第 1 轮输入 1000 token、之后每轮增加 500，跑 4 轮只算输入就是 $1000+1500+2000+2500=7000$。长任务的成本主要花在反复重读旧内容上，这也是后面要做上下文压缩和 KV Cache 的原因。
+\subsection{错误回传}
+
+注册表“永远不抛异常”，而是返回一个带状态的结果。到了循环这一层，这个设计才真正派上用场。
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+工具层错误不终止会话，而是把\textbf{错误变成模型的输入}。调用了不存在的工具，就返回“工具不存在”的结构化错误；参数校验失败，就返回附带输入约束提示的错误。这些错误以普通工具结果的身份进入上下文，由模型在下一轮自行纠正。
+\end{tcolorbox}
+喂回去的错误越具体，模型自我纠正的成功率越高：
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+\begin{tabular}{@{}r@{\quad}l@{}}
+  × & “调用失败”：模型只能瞎猜，很可能原样重试 \\
+  √ & “\texttt{invalid\_args}：缺少必填参数 \texttt{city}（string）”：模型直接补上再调用
+\end{tabular}
+\end{tcolorbox}
+但不是所有错误都值得重试。 
+
+\begin{itemize}
+  \item \textbf{可重试的：}限流、服务过载、网络抖动。原样再试一次就可能成功。
+  \item \textbf{不可重试的：}参数不合法、权限不足、工具不存在。原样重试多少次结果都一样，必须改输入或者换策略。
+\end{itemize}
+\section{组装工具集}
+工具分为五类 ：
+\begin{table}[H]
+\centering
+\caption{五类工具的调用方向与作用对象}
+\label{tab:tool-types}
+\begin{tabular}{p{2.4cm} p{2.6cm} p{3.4cm} p{6.2cm}}
+  \toprule
+  工具类型 & 调用方向 & 作用对象 & 例子 \\
+  \midrule
+  \textbf{感知工具}     & Agent 主动调用 & 获取信息 &
+    \texttt{web\_search}、\texttt{read\_file}、\texttt{grep\_file} \\
+  \addlinespace
+  \textbf{执行工具}     & Agent 主动调用 & 改变世界 &
+    \texttt{shell\_exec}、\texttt{write\_file}、\texttt{send\_email} \\
+  \addlinespace
+  \textbf{协作工具}     & Agent 主动调用 & 驱动其他 Agent 或人 &
+    \texttt{spawn\_subagent}\newline \texttt{send\_message\_to\_subagent} \\
+  \addlinespace
+  \textbf{用户沟通工具} & Agent 主动调用 & 向用户传递信息 &
+    \texttt{reply\_to\_user}\newline \texttt{send\_user\_notification} \\
+  \addlinespace
+  \textbf{事件触发工具} & Agent 注册，外部触发 & 驱动 Agent 开始执行 &
+    \texttt{set\_timer}、\texttt{monitor\_shell} \\
+  \bottomrule
+\end{tabular}
+\end{table}
+最重要的是前两类，它们的设计重点正好相反：
+
+\begin{enumerate}
+  \item 感知工具：关键是控制输出量，防止一次返回太多内容把上下文撑爆。
+  \item 执行工具：出错的代价可能很高，安全约束是设计的核心。
+\end{enumerate}
+% 3.4：工具的分类、工具太多怎么办
+前面几节默认所有工具都写进系统提示词。但工具一多，问题就来了：  可能会选错工具；占token 或者破坏缓存\\
+
+所以应该怎么解决？
+
+\keypoint{1.按需加载和层次化组织}
+\begin{itemize}
+  \item \textbf{只暴露索引：}Agent 默认只看到工具名字的列表，需要时再查完整定义。Cursor 这样做之后，MCP 相关任务的总 token 消耗减少了 46.9\%。
+  \item \textbf{分层分组：}按信息来源分成搜索、读取、解析、查询几组，并在系统提示词里说明分组结构，帮模型快速找到相关的那组工具。
+  \item \textbf{检索预筛选：}按和用户问题的语义相似度，先筛出一批候选工具再交给模型。Anthropic 的实验里，Opus 4 在工具使用基准上的准确率因此从 49\% 提升到 74\%。
+\end{itemize}
+
+\keypoint{2.主动工具发现}
+预筛选只按最开始的问题匹配一次，但任务做到一半可能才发现缺某种能力。所以换个思路：系统提示词里只放几个基础工具，外加一个“工具搜索工具”。Agent 在执行中发现缺什么，就用自然语言说出需求，系统再把匹配的工具定义加进来。Anthropic 的 Tool Search Tool、论文 MCP-Zero 都属于这类。
+
+\keypoint{3. Skills：渐进式披露}
+不再把工具当成需要注册、检索、注入的正式定义，而是当成参考资料：启动时只给一份薄薄的目录（每个 skill 的名字和描述），真正需要时再去读具体内容。好比查词典，没人从第一页读到最后一页，都是顺着目录查需要的那条。这种方式不需要嵌入索引那一套基础设施，实现成本最低。
+
+\keypoint{注意：改动工具定义会让缓存失效}
+工具定义和系统提示词一起构成静态前缀，缓存按前缀命中：从改动的位置开始，后面全部要重新计算。所以改了第一个工具描述里的一个词，几乎整段缓存都失效。新工具的定义应该\textbf{追加到上下文末尾}，之后固定在原位置，作为普通历史消息继续命中缓存，前面的静态前缀不受影响（只增不改）。
