@@ -1,6 +1,40 @@
 ![Agent Harness: CS329Z Assignment 1](assets/agent-harness.png)
 
-# CS329Z Assignment 1: Building an Agent Harness
+# CS329Z HW1：Building an Agent Harness（我的解答）
+
+这是 [agent-notes](https://github.com/ljphaha/agent-notes) 的 `hw1` 分支：Stanford CS329Z 作业 1 的 starter 仓库，加上我的实现。课程笔记在 [`main` 分支](https://github.com/ljphaha/agent-notes)。课程原版的 README 保留在本页下半部分。
+
+## 进度
+
+| 题目 | 做了什么 | 代码 | 结果 |
+|---|---|---|---|
+| P1 priority | 一次 LLM 调用，把一封邮件分成 urgent / normal / ignore | [`priority.py`](cs329z_hw1/pipelines/priority.py) | live 55/60（要求 ≥ 85%） |
+| P2 daily_digest | 并发给一天的邮件分类，丢掉 ignore，每个讨论串只留最紧急的一封，再用一次调用写出不超过 300 词的晨报 | [`digest.py`](cs329z_hw1/pipelines/digest.py) | live 5/5 天，长度、必须提到的名字、不提 ignore 三项全过 |
+| P3 bm25 | 从零实现倒排索引和 BM25（Lucene IDF，k1 = 1.5，b = 0.75） | [`bm25.py`](cs329z_hw1/pipelines/bm25.py) | 18/18 |
+| P4 email_qa | BM25 检索加 LLM 的多跳问答循环，最多搜索 3 次 | [`email_qa.py`](cs329z_hw1/pipelines/email_qa.py) | live 24/25（1 跳 12/12，2 跳 12/13）；答对的 24 题都引用了正确的邮件 |
+| P5–P17 | Part 2：Cardinal Agent | | 未开始 |
+
+P1 到 P4 的确定性测试共 63 个，全部通过。测试只通过 [`adapters.py`](cs329z_hw1/adapters.py) 调用上面这些代码。live 测试用的是评分模型 `openai/gpt-6-luna`（经 OpenRouter）。
+
+## 设计要点
+
+- **P1**：prompt 基本照搬 [`data/priority_rubric.md`](data/priority_rubric.md)，要求模型只输出 JSON。解析分三层：先读 JSON 的 `category`；读不到就在全文找标签词，恰好只有一种才采用；还不行就返回 `unknown`，不猜。
+- **P2**：ignore 的邮件不放进交给写作模型的材料，模型看不到就不会提到。长度靠 prompt 规定结构来控制（每条 urgent 一句话，其余合起来不超过三句），只写一个总词数控制不住。
+- **P3**：倒排表是 `词 → [(文档编号, 词频)]`，搜索只读查询词对应的那几条。查询里重复的词只算一次；排序用 `(-分数, 文档编号)`，同分时编号小的在前。
+- **P4**：用 `for hop in range(3)` 保证搜索次数不超过预算。模型回复 `{"action": "search", ...}` 或 `{"action": "answer", ...}`；`parse_reply` 只负责把 JSON 读出来，由循环决定下一步。模型给出的依据邮件只保留这次真正搜到过的 id。3 次搜索用完后，再要求模型根据已有邮件作答一次。
+
+## 怎么运行
+
+```sh
+cp .env.example .env               # 填入 OPENROUTER_API_KEY
+uv run python data/download.py     # 解压邮件数据
+uv run pytest tests/test_priority.py tests/test_daily_digest.py tests/test_bm25.py tests/test_email_qa.py           # 确定性测试，不花钱
+uv run pytest tests/test_priority.py tests/test_daily_digest.py tests/test_email_qa.py -m live -s                   # live 测试，会调用模型
+```
+
+---
+
+# 课程原版 README：CS329Z Assignment 1: Building an Agent Harness
 
 This is the starter repository for Assignment 1.
 
