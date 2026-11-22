@@ -39,7 +39,7 @@ from cs329z_hw1.types import (
     ToolCall,
     ToolSpec
 )
-from cs329z_hw1.pipelines import priority, digest,bm25
+from cs329z_hw1.pipelines import priority, digest,bm25,email_qa
 # ======================================================================
 # Part 1: LLM pipelines
 # ======================================================================
@@ -139,7 +139,7 @@ def run_email_qa(
       contain an accepted answer, and the ``support`` of every correct
       answer includes at least one gold email.
     """
-    raise NotImplementedError
+    return email_qa.answer_question(question, search, lm)
 
 
 # ======================================================================
@@ -368,7 +368,7 @@ def run_search_docs(index: Any, query: str, k: int = 5) -> list[SearchResult]:
       document and its snippet contains the word.
     * The same call returns the same results every time.
     """
-    raise NotImplementedError
+    
 
 
 def run_read_doc(index: Any, doc_id: str, start_line: int = 1) -> DocWindow:
