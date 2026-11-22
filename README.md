@@ -37,6 +37,17 @@
 | 1-3 | 搜索 + 代码执行 | 待更新 | | |
 | 1-4 | 图像生成：工作流 vs 原生 | 待更新 | | |
 
+## 作业
+
+CS329Z 原版作业，我的实现放在单独的分支上，和笔记分开。
+
+| 作业 | 分支 | 进度 | 结果 |
+|---|---|---|---|
+| HW1 Building an Agent Harness | [`hw1`](https://github.com/ljphaha/agent-notes/tree/hw1) | Part 1（P1–P4）已完成；Part 2 未开始 | 邮件优先级 55/60；每日晨报 5/5 天；BM25 18/18；多跳问答 24/25 |
+| HW2 Building an Evaluation Task | | 未开始 | |
+
+HW1 的代码在 `hw1` 分支的 [`cs329z_hw1/pipelines/`](https://github.com/ljphaha/agent-notes/tree/hw1/cs329z_hw1/pipelines)，每题的结果和设计要点见该分支的 [README](https://github.com/ljphaha/agent-notes/blob/hw1/README.md)。
+
 ## 目录结构
 
 ```
