@@ -18,7 +18,7 @@
 | 1 | Agent、工作流与 Harness：谁决定下一步、工具调用怎么发生、Harness 五要素、上下文的组成与 ReAct 轨迹 | [ai-agent-note-1.pdf](ai-agent-note-1.pdf) |
 | 2 | 固定流水线、BM25 与多跳检索：把一次调用写成规格说明、防御式解析、多次调用的分工、RAG 与 BM25、倒排索引与检索评价、多跳检索 | [ai-agent-note-2.pdf](ai-agent-note-2.pdf) |
 | 3 | 工具协议与 Agent 循环：工具与 MCP、工具注册表与结果状态、工具设计原则与参数保真、Chat Template 与文本调用协议、Agent 循环的终止与预算、错误回传、工具分类与工具太多时的按需加载 | [ai-agent-note-3.pdf](ai-agent-note-3.pdf) |
-| 4 | 文档工具、终端与上下文管理 | 待更新 |
+| 4 | 文档工具、终端与上下文管理：检索工具与渐进式披露、Agent Skills、执行工具的安全设计与长输出观察策略、Transformer 三性质与 KV Cache、Prompt Cache 与缓存友好的上下文、上下文压缩、子 Agent 隔离与状态栏 | [ai-agent-note-4.pdf](ai-agent-note-4.pdf) |
 | 5 | 跨会话记忆、用户审批与防注入 | 待更新 |
 | 6 | 用模拟用户评测完整 Agent | 待更新 |
 | 7 | 运行公开 Benchmark 并读懂轨迹 | 待更新 |

@@ -1,0 +1,643 @@
+% !TEX root = ../ai-agent-note-4.tex
+\chapter{文档工具、终端与上下文管理}
+
+\section{给 Agent 设计检索工具}
+% 4.1：检索变成工具、搜索与读取分开、渐进式披露、显式截断
+
+\subsection{智能体化RAG}
+\begin{definition}
+    智能体化 RAG 把检索变成一个 Agent 随时可以调用的工具：模型先想清楚该搜什么，搜完看结果够不够，不够就换个更准的关键词再搜，直到信息足够才作答
+\end{definition}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  >={Stealth[length=2.2mm,width=1.8mm]},
+  box/.style={draw=#1, fill=#1!9, rounded corners=4pt, line width=0.8pt,
+              align=center, inner sep=5pt, minimum height=1.05cm},
+  box/.default=structurecolor,
+  gbox/.style={draw=black!35, fill=black!4, rounded corners=4pt, line width=0.6pt,
+               align=center, inner sep=4pt, minimum height=0.85cm, text=black!70},
+  flow/.style={->, line width=0.9pt, draw=black!55},
+  gflow/.style={->, line width=0.7pt, draw=black!35},
+  lbl/.style={font=\footnotesize, text=black!70, align=center},
+  title/.style={font=\bfseries, anchor=north west, inner sep=0pt},
+]
+  % ---------- 智能体化 RAG ----------
+  \node[gbox, minimum width=1.7cm]                       (q)     at (0,0)    {用户问题};
+  \node[box, minimum width=2.9cm]                         (agent) at (3.9,0)  {\textbf{Agent（LLM）}\\[1pt]{\footnotesize Thought：推理与决策}};
+  \node[box=teal, minimum width=2.6cm]                    (tool)  at (10.3,0)  {\textbf{检索工具}\\[1pt]{\footnotesize\ttfamily search(query)}};
+  \node[cylinder, shape border rotate=90, aspect=0.22, draw=teal, fill=teal!14,
+        line width=0.8pt, minimum width=1.5cm, minimum height=1.25cm, align=center] (kb) at (13.4,0) {知识库};
+  \node[box=orange, minimum width=4.2cm]                  (pool)  at (7.1,-2.55) {\textbf{证据池（累积）}\\[1pt]{\footnotesize 第 1 跳 + 第 2 跳 + …，去重}};
+  \node[box=green!55!black, minimum width=3.4cm]          (ans)   at (10.3,2.1) {\textbf{最终答案}\\[1pt]{\footnotesize 引用必须来自检索结果}};
+
+  \draw[flow] (q) -- (agent);
+  \draw[flow] (agent) -- node[lbl, above]{\textbf{Action}：发出查询 $q$}
+                         node[lbl, below]{② 检索什么\\{\scriptsize 用新线索改写 $q$}} (tool);
+  \draw[<->, line width=0.9pt, draw=teal!70] (tool) -- (kb);
+  \draw[flow] (tool.south) |- node[lbl, pos=0.25, right]{检索结果} (pool.east);
+  \draw[flow] (pool.west) -| node[lbl, pos=0.75, left]{\textbf{Observation}\\全部证据\\交回模型} (agent.south);
+  \draw[flow, draw=green!45!black] (agent.north) |- node[lbl, pos=0.75, above]{③ 证据够了 $\Rightarrow$ 作答} (ans.west);
+  \node[lbl, anchor=east, text=structurecolor] at ($(agent.north)+(-0.12,1.05)$) {① 要不要检索？};
+
+  \begin{scope}[on background layer]
+    \node[draw=structurecolor!55, dashed, rounded corners=8pt, line width=0.7pt,
+          fit=(agent)(tool)(pool), inner xsep=10pt, inner ysep=12pt] (loop) {};
+  \end{scope}
+  \node[font=\footnotesize\bfseries, text=structurecolor, fill=white, inner sep=2pt,
+        anchor=west] at ($(loop.south west)+(0.35,0)$) {ReAct 循环 · 不够就改写查询再搜（最多 $H$ 轮）};
+
+  \node[title, text=structurecolor] at (-0.85,3.25) {智能体化 RAG：检索是 Agent 随时可调用的工具};
+
+  % ---------- 对照：传统 RAG ----------
+  \begin{scope}[yshift=-5.6cm]
+    \node[title, text=black!60] at (-0.85,0.95) {对照 · 传统 RAG：固定流水线，只检索一次};
+    \node[gbox, minimum width=1.7cm] (tq) at (0,0)    {用户问题};
+    \node[gbox, minimum width=2.2cm] (tr) at (3.35,0)  {检索 top-$k$};
+    \node[gbox, minimum width=2.2cm] (tc) at (6.7,0)  {拼进上下文};
+    \node[gbox, minimum width=2.2cm] (tg) at (10.05,0)  {LLM 生成};
+    \node[gbox, minimum width=1.5cm] (ta) at (13.4,0) {答案};
+    \draw[gflow] (tq) -- (tr);
+    \draw[gflow] (tr) -- (tc);
+    \draw[gflow] (tc) -- (tg);
+    \draw[gflow] (tg) -- (ta);
+    \node[lbl, text=red!60!black, below=2pt of tr] {\scriptsize 搜不到也只能硬答};
+  \end{scope}
+\end{tikzpicture}
+\caption{智能体化 RAG 与传统 RAG：Agent 自己做三个决定——要不要检索、检索什么、结果够不够}
+\label{fig:agentic-rag}
+\end{figure}
+
+\subsection{渐进式披露：搜索与读取分开}
+
+智能体Rag有一个问题，就是工具原封不动进入上下文，搜什么、搜几次、什么时候停，中间没有代码把关。返回的结果如果过长，预算会花光很快。
+
+所以需要新的设计模式叫渐进式披露：
+\begin{definition}
+    渐进式披露：不把全部信息一次性放进上下文，而是先给一份可检索的目录，再按需加载细节。它同时优化两件事：上下文预算与选择精度。
+\end{definition}
+
+优化的两件事：
+\begin{itemize}
+  \item \textbf{上下文预算：}只装进需要的那一小段，省 token。
+  \item \textbf{选择精度：}模型先看一份短短的候选列表，比在一大堆全文里找答案更容易挑对。\\
+\end{itemize}
+
+落到检索上，要拆成两个工具包括\textbf{搜索工具和读取工具：}
+\begin{itemize}
+  \item \textbf{搜索工具：}返回结构化的候选列表（标题、位置、摘要片段），不要返回拼接好的全文。让 Agent 先浏览候选，再决定深入读哪一条。结果多时提供分页，并注明结果总数和取下一页的方法。
+  \item \textbf{读取工具：}支持 offset / limit 这类参数，按需读大文件的指定片段。
+\end{itemize}
+读取的窗口不一定全部读完，所以要保证不能\textbf{静默截断}，防止Agent 会以为自己看到了全部内容，然后基于不完整的信息做出错误判断。截断时要把三件事说清楚：读了哪几行、一共多少行、怎么接着读。
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+已显示第 1--200 行，共 5000 行，可用 offset 参数继续读取。
+\end{tcolorbox}
+
+\section{Agent Skills：按需加载的能力}
+
+\subsection{Skill 是什么：三层按需加载}
+Agent 要做的事越来越多，如果把所有领域的说明（退款规则、代码规范、格式要求……）都塞进系统提示词，会有两个问题：
+\begin{itemize}
+  \item \textbf{浪费 token：}大部分内容和当前任务无关。
+  \item \textbf{稀释注意力：}无关信息太多，模型对关键内容的注意力被冲淡。
+\end{itemize}
+所以思路从“一次全塞给它”变成“让它按需加载”，Skill 就是这个思路的工程实现。
+% 4.2：三层渐进式披露、Skill 与工具的分工、怎么写 Skill
+\begin{definition}
+   每个 Skill 是一份操作手册，就像给新员工准备的某项专门任务的说明书。 不会把公司所有部门的手册都堆到新员工桌上，而是先给一份总目录，需要哪本再去取。
+\end{definition}
+    \begin{table}[H]
+\centering
+\caption{Skill 的三层按需加载}
+\label{tab:skill-layers}
+\begin{tabular}{p{3.2cm} p{5.6cm} p{5.8cm}}
+  \toprule
+  层 & 内容 & 什么时候进入上下文 \\
+  \midrule
+  \textbf{第一层：元数据}   & \texttt{SKILL.md} 开头的 \texttt{name} 和 \texttt{description} & \textbf{一直在}，作为目录常驻 \\
+  \addlinespace
+  \textbf{第二层：核心流程} & \texttt{SKILL.md} 的正文 & 判断需要这个 Skill 时才加载 \\
+  \addlinespace
+  \textbf{第三层：细则}     & 正文里引用的子文档、模板、脚本 & 做到具体某一步、需要细节时才读 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+第二层一般怎么触发：
+\begin{itemize}
+  \item \textbf{用户输入斜杠命令：}比如 /pptx，客户端直接把正文展开进去，模型不用发起调用。
+  \item \textbf{模型自己判断需要：}调用一个专用的 Skill 工具来加载，比前一种多一次 ReAct 往返。
+\end{itemize}
+\subsection{Skill 与工具的分工}
+
+工具是能调用的动作，Skill 是告诉 Agent 怎样组合这些动作的说明书。Skill一般加载到哪里？以 Claude Code 为例，Skill 正文在被调用的位置作为一条 user 消息追加进会话，而不是插回系统提示词。原因是\textbf{只增不改}：插回前面会改动前缀，缓存从插入点开始全部失效；追加在末尾，前面的缓存都能复用。不过对缓存友好不等于零成本，正文第一次加载时同样要计算，之后的请求才能复用。
+
+各家实现不同，但原则一致：\textbf{少量目录常驻，完整正文按需加载}。
+
+\subsection{怎样写一份可用的 Skill}
+最关键的是 description。 它决定 Skill 会不会在该用的时候被选中。
+\begin{itemize}
+  \item \textbf{要短：}它常驻上下文，每个字都一直在花 token。
+  \item \textbf{写成路由条件，不写功能介绍：}写清“何时用我”，甚至“何时不用我”，再给几个反例，减少误触发。
+\end{itemize}
+一份skill包含四部分
+\begin{enumerate}
+  \item \textbf{角色与读者：}服务谁、面向什么任务、输出要达到什么标准。
+  \item \textbf{核心原则：}只留三到五条最重要的判断，关键的配上正例和反例。
+  \item \textbf{禁止清单：}高频错误、越权动作、容易误解的表达，同时写清合法的例外。
+  \item \textbf{参考资料：}术语表、模板、范文、更详细的子文档。这一部分就是第三层。
+\end{enumerate}
+怎么迭代？从真实任务里提炼。先拿三到五篇自己的文章生成一份二十行左右的初版，用它写新文章，作者逐句改稿，再把反复出现的修改写回 Skill。
+\section{终端工具：执行与观察策略}
+% 4.3：执行工具的安全设计、长输出的观察策略
+\subsection{执行工具的安全设计}
+执行工具相对Rag,Skill这些只读工具设计更难，比如误删的文件无法恢复，错误的系统命令可能导致服务中断，不当的 API 调用可能造成真实的财务损失。所以设计要在能力开放和安全约束之间找平衡。
+所以原则是\textbf{不能只靠一道防线，要分层}。
+\begin{table}[H]
+\centering
+\caption{执行工具的分层安全设计}
+\label{tab:exec-safety}
+\begin{tabular}{p{2.4cm} p{4.0cm} p{8.2cm}}
+  \toprule
+  层 & 做什么 & 例子 / 要点 \\
+  \midrule
+  \textbf{1. 输入验证} & 执行前检查参数是否合法 &
+    路径里有 \texttt{../../etc/passwd} 这种跳出目录的写法；命令里用分号、管道拼接了别的命令。发现异常\textbf{立即拒绝}，不要“智能”修正 \\
+  \addlinespace
+  \textbf{2. 权限控制} & 限制能碰到的范围 &
+    只能访问指定工作目录；危险命令黑名单。但黑名单能被变形命令绕过，\textbf{只能当最基础的一层} \\
+  \addlinespace
+  \textbf{3. 独立审查} & 换一个视角再看一遍 &
+    \textbf{提议者-审核者}：执行前由另一个模型审批，或执行后换一种方式验证结果；\newline
+    \textbf{Sidecar}：主模型发出调用时，旁路的轻量模型同时判断这条调用危不危险 \\
+  \addlinespace
+  \textbf{4. 沙盒隔离} & 就算前面都漏了，坏代码也跑不出这个盒子 &
+    进程级 $\rightarrow$ 容器（Docker）$\rightarrow$ microVM，隔离强度递增 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+\textbf{一个常见误区：Python 虚拟环境（venv）不是沙盒。}它只隔离安装的包，对文件、网络、进程没有任何限制；在 venv 里跑的代码照样能删掉任何文件。真正的隔离要靠操作系统级别的机制：进程级沙盒、容器、microVM。
+
+执行工具要回答一个问题：调用超时或被取消时，副作用到底发生了没有？\textbf{（幂等性问题）}
+例子：一次转账在网络超时后返回失败，钱可能已经转出去了，也可能还没有。Agent 要是直接重试，就可能转两次。
+
+幂等：同一个操作执行一次和执行多次，效果完全一样，可以放心重试。常见做法有：
+\begin{itemize}
+  \item 给操作带一个唯一标识，服务端看到重复请求就直接返回第一次的结果。
+  \item 先查后改：重试前先查一下订单是不是已经建了、文件是不是已经写了。
+\end{itemize}
+做不成幂等的操作包括发邮件、打电话、对外转账，每做一次就是一件收不回来的事。一般做法是\textbf{“预检--确认”两段式}：先校验，再真正执行；执行失败不能盲目重试，要把错误交回给 Agent 重新规划。
+\subsection{观察策略：长输出怎么给模型看}
+一条命令打印出来的东西，可能比模型的上下文能装的多得多，比如一次输出几十万字符。
+
+几种做法：
+\begin{table}[H]
+\centering
+\caption{长输出的几种观察策略}
+\label{tab:observation-policy}
+\begin{tabular}{p{2.6cm} p{2.8cm} p{4.6cm} p{4.6cm}}
+  \toprule
+  做法 & 谁在用 & 好处 & 代价 \\
+  \midrule
+  \textbf{原样返回} & mini-swe-agent &
+    简单，模型看到全部 &
+    输出一大，上下文直接爆 \\
+  \addlinespace
+  \textbf{保留头尾截断} & Codex CLI &
+    开头有初始输出和报错上下文，结尾有最终错误或成功标志 &
+    中间的内容丢了，找不回来 \\
+  \addlinespace
+  \textbf{截断 + 全文写进文件} & OpenHands\newline Gemini CLI\newline Claude Code &
+    上下文只放头尾；模型需要时再去搜、去读那个文件 &
+    多一步读取；要管理临时文件 \\
+  \addlinespace
+  \textbf{另一个模型摘要} & 也是一种选择 &
+    压缩比高 &
+    多一次调用，摘要可能丢掉模型要的那一行 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+一般采用第三种，比如：输出超过阈值（如 200 行或 10,000 字符）时，返回给模型的结果包含四样东西：
+\begin{enumerate}
+  \item \textbf{头部：}保留前 50 行，通常有初始输出和报错上下文；
+  \item \textbf{尾部：}保留后 50 行，通常有最终错误或成功标志；
+  \item \textbf{中间提示：}写明省略了多少，例如“省略 8523 行，完整输出已保存至 \texttt{/tmp/execution\_output.txt}”；
+  \item \textbf{文件引导：}告诉模型“如需完整输出，请用 \texttt{read\_file} 读取该文件”。
+\end{enumerate}
+这其实就是两条原则又用了一遍：\textbf{截断要说出来}，模型才不会以为自己看全了；\textbf{渐进式披露}，全文不塞进上下文，只给一个文件路径作为指针，需要时再读。
+
+\section{Chat Template 与 KV Cache}
+% 4.4：前缀缓存、只增不改、对缓存友好的上下文
+\subsection{Transformer 的三个性质}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  >={Stealth[length=2.2mm,width=1.8mm]},
+  box/.style={draw=#1, fill=#1!9, rounded corners=4pt, line width=0.8pt,
+              align=center, inner sep=4pt, minimum height=0.8cm, minimum width=4.4cm},
+  box/.default=structurecolor,
+  flow/.style={->, line width=0.9pt, draw=black!55},
+  res/.style={->, line width=0.7pt, draw=black!40},
+  lbl/.style={font=\footnotesize, text=black!70, align=center},
+  tok/.style={draw=black!35, fill=black!4, rounded corners=2pt, line width=0.6pt,
+              minimum width=0.9cm, minimum height=0.6cm, inner sep=2pt},
+]
+  % ---------- 输入 ----------
+  \node[tok] (x1) at (-1.65,0) {$x_1$};
+  \node[tok] (x2) at (-0.55,0) {$x_2$};
+  \node[lbl]      at ( 0.55,0) {$\cdots$};
+  \node[tok] (xt) at ( 1.65,0) {$x_t$};
+  \node[lbl, anchor=north] at (0,-0.4) {输入 token 序列};
+
+  \node[box=gray] (emb) at (0,1.35) {Token Embedding $+$ 位置编码};
+
+  % ---------- N 层 Decoder Block ----------
+  \node[box] (mha) at (0,3.0)
+    {\textbf{Masked Multi-Head Attention}\\[-1pt]{\footnotesize 因果自注意力（算出 $Q,K,V$）}};
+  \node[box=gray, minimum height=0.6cm] (an1) at (0,4.25) {Add \& Norm};
+  \node[box=teal] (ffn) at (0,5.4)
+    {\textbf{Feed-Forward}\\[-1pt]{\footnotesize 逐位置的前馈网络}};
+  \node[box=gray, minimum height=0.6cm] (an2) at (0,6.65) {Add \& Norm};
+
+  \draw[flow] (x1.north) -- (x1.north |- emb.south);
+  \draw[flow] (x2.north) -- (x2.north |- emb.south);
+  \draw[flow] (xt.north) -- (xt.north |- emb.south);
+  \draw[flow] (emb) -- (mha);
+  \draw[flow] (mha) -- (an1);
+  \draw[flow] (an1) -- (ffn);
+  \draw[flow] (ffn) -- (an2);
+
+  % 残差连接
+  \coordinate (r1) at ($(emb.north)!0.5!(mha.south)$);
+  \coordinate (r2) at ($(an1.north)!0.5!(ffn.south)$);
+  \fill[black!45] (r1) circle (1.5pt);
+  \fill[black!45] (r2) circle (1.5pt);
+  \draw[res] (r1) -- ++(-2.55,0) |- (an1.west);
+  \draw[res] (r2) -- ++(-2.55,0) |- (an2.west);
+
+  \draw[structurecolor!55, dashed, rounded corners=8pt, line width=0.7pt]
+    (-3.0,2.0) rectangle (3.0,7.15);
+  \node[font=\bfseries, text=structurecolor, anchor=east] at (-3.1,4.6) {$N\times$};
+
+  % ---------- 输出 ----------
+  \node[box=gray] (lin) at (0,8.0) {Linear $+$ Softmax};
+  \node[box=green!55!black] (out) at (0,9.3)
+    {\textbf{下一个 token 的概率分布}\\[-1pt]{\footnotesize $P(x_{t+1}\mid x_1,\dots,x_t)$}};
+  \draw[flow] (an2) -- (lin);
+  \draw[flow] (lin) -- (out);
+
+  % 自回归回路
+  \draw[flow, draw=orange!80!black] (out.west) -- (-4.5,9.3)
+    -- node[lbl, rotate=90, above, text=orange!70!black]
+       {\textbf{自回归}：采样出 $x_{t+1}$，追加到序列末尾，再算一遍}
+    (-4.5,0) -- (x1.west);
+
+  % ---------- 右侧：因果掩码 ----------
+  \foreach \i in {1,...,5}{
+    \foreach \j in {1,...,5}{
+      \ifnum\j>\i
+        \draw[black!25, fill=white]
+          ({4.6+0.32*(\j-1)}, {3.8-0.32*\i}) rectangle ++(0.32,0.32);
+      \else
+        \draw[black!25, fill=structurecolor!40]
+          ({4.6+0.32*(\j-1)}, {3.8-0.32*\i}) rectangle ++(0.32,0.32);
+      \fi
+    }
+  }
+  \node[lbl, anchor=south] at (5.4,3.85) {\textbf{因果掩码}};
+  \node[lbl, anchor=north] at (5.4,2.15) {行：当前 token\\列：被看的 token\\只能看自己和前面的};
+  \draw[structurecolor!60, dashed, line width=0.7pt] (mha.east) -- (4.5,3.0);
+
+  % ---------- 右侧：K/V 注释 ----------
+  \node[draw=orange!70!black, fill=orange!6, rounded corners=4pt, line width=0.6pt,
+        font=\footnotesize, align=left, inner sep=5pt, anchor=west] (kv) at (3.5,5.9)
+    {每层都为每个 token 存一份 $K, V$；\\后面的 token 改变不了前面的 $K, V$\\$\Rightarrow$ 可以缓存复用（KV Cache）};
+\end{tikzpicture}
+\caption{Decoder-only Transformer（GPT 类 LLM）：因果注意力 + $N$ 层堆叠 + 自回归逐 token 生成}
+\label{fig:transformer-decoder}
+\end{figure}
+
+\noindent\textbf{性质 1：先整段读，再一个一个往外蹦}
+
+\textbf{prefill（预填充）：}模型先把整个输入一次性过一遍。
+
+\textbf{decode（解码）：}然后每生成一个新 token，就把它接到末尾，再生成下一个。
+
+\medskip
+\noindent\textbf{性质 2：注意力靠 Q、K、V}
+
+每个 token 都会算出三个向量：Query、Key、Value。生成下一个 token 时：
+
+拿当前位置的 Q，去和前面所有 token 的 K 做点积，算出匹配度；
+再按匹配度，对这些 token 的 V 加权求和，得到这个位置的输出，用来预测下一个 token。
+
+写成公式。第 $i$ 个 token 的表示 $x_i$ 乘上三个可学习的矩阵，得到它的三个向量：
+\[
+  q_i = x_i W_Q, \qquad k_i = x_i W_K, \qquad v_i = x_i W_V
+\]
+第 $t$ 个位置的输出，是前面所有 token 的 $v_i$ 按匹配度加权求和：
+\[
+  \alpha_{t,i} = \operatorname{softmax}_{i\le t}\!\left(\frac{q_t \cdot k_i}{\sqrt{d_k}}\right),
+  \qquad
+  o_t = \sum_{i=1}^{t} \alpha_{t,i}\, v_i
+\]
+其中 $d_k$ 是 K 向量的维度，除以 $\sqrt{d_k}$ 是为了不让点积太大、把 softmax 压成一边倒；$i\le t$ 就是性质 3 的因果掩码。
+把所有位置拼成矩阵 $Q, K, V$，就是常见的写法：
+\[
+  \operatorname{Attention}(Q,K,V) = \operatorname{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}} + M\right) V
+\]
+$M$ 是掩码矩阵：$i\le t$ 的位置填 $0$，后面的位置填 $-\infty$，softmax 之后权重变成 $0$。
+
+注意 $k_i, v_i$ 只由 $x_i$ 决定，生成新 token 时前面的 $k_i, v_i$ 不会变，这正是后面 KV Cache 能缓存复用的原因。
+
+好比查资料：Q 是你想问的问题，K 是每本书的书名，V 是书的内容。先看哪些书名和问题最匹配，再按匹配程度把它们的内容综合起来。
+
+\medskip
+\noindent\textbf{性质 3：只能往前看，而且层层串联}
+
+\textbf{因果掩码：}每个 token 只能看见它自己和它前面的 token，看不见后面的。
+
+\textbf{层层串联：}大模型有几十到上百层，第 1 层的输出是第 2 层的输入，依此类推。每一层都有自己的 K、V。
+
+\begin{tcolorbox}[colback=second!5, colframe=second, title=结论]
+  第 i 个 token 在每一层的 K、V，只取决于前 i 个 token。 后面追加什么，都不会改变它。
+\end{tcolorbox}
+\subsection{从消息到 token：Chat Template}
+Chat Template 是“信封格式”：API 里的结构化消息，被它用特殊标记（如 <|im\_start|>system、<|im\_end|>）转成一串线性的 token。
+
+\textbf{为什么KV Cache对前缀这么敏感}：
+Chat Template 会把 system 消息和工具定义转换成一段固定的 token 序列，放在最前面。这段就是“前缀”，它的 K、V 被缓存后可以跨请求复用。但前缀里只要有一个 token 变了，哪怕系统提示词里多了一个空格，从第一个不同的 token 开始，缓存就不能用了。
+\subsection{KV Cache：为什么前缀一变就全部失效}
+\textbf{先讨论假如不缓存会怎么样？}
+
+上下文有 4 个 token [A, B, C, D]，模型要生成第 5 个 E：用 D 的 Q，去和 A、B、C、D 的 K 算匹配度，再加权它们的 V。
+\begin{itemize}
+  \item \textbf{不缓存:}每生成一个新 token，都要把整个前缀的 K、V 从头算一遍。生成 E 要算 4 组，生成下一个要算 5 组……前缀长到 N，累计计算量和 N² 成正比。
+  \item \textbf{缓存：} 每个 token 的 K、V 只在它第一次进入上下文时算一次，之后一直留着。生成 E 时，A–D 的 K、V 直接从缓存里取；E 生成出来后，再算 E 自己的 K、V 追加进缓存
+\end{itemize}
+KV Cache 省掉的是历史 token 的 K、V 重算。每生成一个新 token，注意力仍然要扫一遍所有缓存的 K、V，计算量随上下文长度线性增长。所以长上下文的解码还是会越来越慢，KV Cache 占用的显存也会成为瓶颈
+
+\textbf{为什么改一个token后面要重算?}
+
+第 k 个 token 一变，它在第 1 层的输出就变了；第 1 层的输出是第 2 层的输入，于是第 2 层从第 k 个位置往后也全变了……一层层传下去。所以：
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+  缓存只能保留到第一个不同的 token 之前，从那里往后全部重算。改动越靠前，作废的缓存越多。
+\end{tcolorbox}
+\begin{table}[H]
+\centering
+\caption{三种上下文改动对 KV Cache 的影响}
+\label{tab:kv-cache-ops}
+\begin{tabular}{p{3.6cm} p{5.4cm} p{5.6cm}}
+  \toprule
+  操作 & 前面的 K、V & 缓存 \\
+  \midrule
+  \textbf{在末尾追加} &
+    一个都不变（性质 3：前面看不见后面） &
+    \textbf{全部可复用}，只算新加的部分 \\
+  \addlinespace
+  \textbf{改了第 $k$ 个 token} &
+    第 $k$ 个之前不变，之后全变 &
+    从第 $k$ 个开始失效 \\
+  \addlinespace
+  \textbf{在中间插入或删掉一段} &
+    后面所有 token 的\textbf{位置}都变了 &
+    从改动处开始失效，哪怕后面的内容一字没改 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+\subsection{KV Cache 与 Prompt Cache}
+KV Cache 和 Prompt Cache作用在不同层级：
+\begin{table}[H]
+\centering
+\caption{KV Cache 与 Prompt Cache}
+\label{tab:kv-vs-prompt-cache}
+\begin{tabular}{p{2.6cm} p{6.0cm} p{6.0cm}}
+  \toprule
+   & \textbf{KV Cache} & \textbf{Prompt Cache} \\
+  \midrule
+  在哪一层 & 模型内部的机制 & 推理引擎、API 服务商的优化 \\
+  \addlinespace
+  作用范围 & \textbf{一次请求之内} & \textbf{多次请求之间} \\
+  \addlinespace
+  省掉什么 &
+    生成每个新 token 时，不再重算前面 token 的 K、V &
+    新请求的前缀和之前某次请求相同时，直接复用当时算好的 K、V \\
+  \addlinespace
+  共同前提 & \multicolumn{2}{c}{\textbf{前缀不变}} \\
+  \bottomrule
+\end{tabular}
+\end{table}
+Agent 每一轮都要把整个上下文重新发一遍。没有 Prompt Cache，每轮都要为前面的内容重新付全价；有了它，重复的前缀按缓存价计费。
+\subsection{对缓存友好的上下文设计}
+三条核心原则：
+
+\textbf{1. 系统提示词和工具定义一旦确定就不要改。} 多一个空格都可能让缓存失效，改动越靠前，影响越大。
+
+\textbf{2. 动态信息永远追加到末尾。} 时间戳、用户状态这类会变的内容，作为新消息追加，不要改已有的系统提示词。
+
+\textbf{3. 用标准 API 格式，不要自己拼接消息。} 这一条的根本原因其实不在缓存，而在偏离了模型训练时的格式。缓存只认字节序列，拼接方式稳定的话照样能命中。
+举例五种反模式：
+\begin{table}[H]
+\centering
+\caption{对缓存不友好的五种反模式}
+\label{tab:cache-anti-patterns}
+\begin{tabular}{p{2.4cm} p{3.2cm} p{5.0cm} p{4.0cm}}
+  \toprule
+  反模式 & 做法 & 问题 & 正确做法 \\
+  \midrule
+  \textbf{动态系统提示词} &
+    把当前时间写进系统提示词 &
+    每次请求前缀都变，几乎全部缓存失效 &
+    作为新消息追加到末尾，或需要时用工具查 \\
+  \addlinespace
+  \textbf{动态用户配置} &
+    每次请求都更新上下文里的剩余额度、余额 &
+    同上 &
+    需要时通过专门的状态机制获取 \\
+  \addlinespace
+  \textbf{工具定义动态排序} &
+    按使用频率调整工具顺序 &
+    工具定义占篇幅大，从第一个挪动的工具开始全部失效 &
+    固定顺序。实验表明固定顺序几乎不影响选工具的能力 \\
+  \addlinespace
+  \textbf{滑动窗口} &
+    只保留最近 $N$ 条消息 &
+    \circled{1} 删掉最早的消息，位置全变，缓存失效；\newline
+    \circled{2} 丢掉早期的工具结果，Agent 忘了自己已经拿到过，反复调用同一个工具 &
+    用上下文压缩（见 4.5） \\
+  \addlinespace
+  \textbf{自拼文本格式} &
+    把消息拼成 \texttt{USER: \ldots{} ASSISTANT: \ldots} 纯文本 &
+    偏离训练格式：重复执行已完成的操作、忽略工具结果、该调工具时却直接回答 &
+    用标准 API 的结构化消息 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+最后两种值得多看一眼：它们的危害不只是贵。滑动窗口会让 Agent 忘事、陷入循环；自拼格式会削弱模型的多步思考能力。
+
+\section{上下文压缩与状态保持}
+% 4.5：为什么压缩、分层压缩、什么不能丢、状态栏
+\subsection{为什么要压缩}
+\begin{tabular}{@{}>{\bfseries}l@{\quad}p{0.82\linewidth}@{}}
+1.长度和成本： & 窗口有限，工具结果动辄几万字符，几轮就装满；而且 token 越多越贵、越慢。这是最直观的一条。 \\
+2.思考质量： & 就算装得下，把原始信息堆在那里也不是最好的。十几轮搜索结果散落各处，模型每次决策都得在几万 token 里重新找。不如先总结成“目前已知：A 是……，B 是……，还缺 C”，后面直接用这份精炼的结论。 \\
+3.上下文焦虑： & 模型觉得窗口快用完时，可能在任务还没做完时就提前收尾。窗口还没满时提前压缩，反而能让它决策得更好。 \\
+
+\end{tabular}
+
+\keypoint{第 2 条背后的原理：注意力擅长“查”，不擅长“数”}
+上下文里有 100 个笼子的记录（“笼子 1：黑猫；笼子 2：白猫……”）。问“笼子 37 里是什么猫”是\textbf{查找}，注意力一下就能找到；问“一共几只黑猫”是\textbf{统计}，要遍历全部记录边看边数，每问一次就要重数一遍。如果提前写好“黑猫 90 只，白猫 10 只”，模型直接就能查到。
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+压缩的第二个价值：把需要思考才能得到的结论，变成可以直接检索的知识。
+\end{tcolorbox}
+
+\begin{table}[H]
+\centering
+\caption{上下文溢出与上下文腐化}
+\label{tab:overflow-vs-rot}
+\begin{tabular}{p{2.0cm} p{5.6cm} p{7.0cm}}
+  \toprule
+   & 上下文溢出 & 上下文腐化（Context Rot） \\
+  \midrule
+  是什么 & 装不下了 & 装得下，但找不到了 \\
+  \addlinespace
+  表现 & 报错、任务中断 & 表面正常，决策质量悄悄下降：找不到关键信息，反复纠结早已解决的问题 \\
+  \addlinespace
+  原因 & 超出窗口长度 & 注意力被分散到太多 token 上；无关内容占了大头 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+腐化更危险，因为它不报错。
+
+\subsection{压缩与 KV Cache}
+4.4 说“前缀不要改”，压缩却要改中间的内容。两者不矛盾，关键看时机和位置：
+\begin{enumerate}
+  \item \textbf{压缩发生在两次 API 调用之间}：由 Agent 框架改写要发出去的消息列表；
+  \item \textbf{系统提示词和工具定义永远不动}：静态前缀照常命中缓存；
+  \item \textbf{压缩的对象是对话历史里的工具结果}：替换位置之后的缓存失效，之前的不受影响；
+  \item \textbf{这是有意识的权衡}：不压缩会溢出、任务失败；压缩损失一部分缓存，换来长度可控、信息更密。
+\end{enumerate}
+所以\textbf{不要每轮都压，等接近阈值时一次批量压缩}：每压一次就作废一次缓存。另外，压缩只改发给模型的内容，完整日志一条都不删。
+
+\subsection{分层压缩：先丢什么，什么不能丢}
+压缩时把\textbf{当前的查询意图和已知信息}一起交给压缩模型（上下文感知压缩），效果明显好于逐条摘要或合并摘要。生产系统通常把多种策略组合成分层机制，\textbf{先做便宜的，不够再做贵的}：
+\begin{table}[H]
+\centering
+\caption{分层压缩（以 Claude Code 为参照）}
+\label{tab:layered-compaction}
+\begin{tabular}{p{3.4cm} p{6.6cm} p{4.6cm}}
+  \toprule
+  层 & 做什么 & 代价 \\
+  \midrule
+  1. 工具结果预算控制 & 大输出存磁盘，模型只看预览；替换一旦做出就固定 & 最便宜 \\
+  \addlinespace
+  2. 噪声直接删除 & 低价值内容直接删，\textbf{不做摘要} & 对噪声做摘要只是浪费 token \\
+  \addlinespace
+  3. API 层微压缩 & 让服务端从前缀里移除指定工具结果，本地消息不变 & 移除点之后缓存失效，适合快溢出时用 \\
+  \addlinespace
+  4. 归档式摘要 & 逐轮做结构化摘要，像 \texttt{git log} 保留每一轮，而不是合成一条 & 要调用模型 \\
+  \addlinespace
+  5. 全量压缩 & 模型驱动的完整压缩，\textbf{最后手段}；连续失败就熔断 & 最贵 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+
+四条设计原则：
+\begin{enumerate}
+  \item \textbf{信息价值不均匀：}关键决策点 $>$ 支撑证据 $>$ 噪声；
+  \item \textbf{语义完整：}“Sutskever 于 2024 年 5 月离开 OpenAI”不能压成“Sutskever 离开”，时间和公司名不能丢；
+  \item \textbf{任务相关：}同一段内容，任务不同压出来就不同，检索类保留广度，分析类保留深度；
+  \item \textbf{压缩即理解：}负责压缩的模型要接近主模型的能力。
+\end{enumerate}
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+\textbf{什么绝不能丢：}早期的架构决策、约束背后的理由、失败过的路径（丢了会把走不通的路再走一遍）。所以 Agent 要\textbf{定期把进展写进文档}，不能只散落在执行历史里。一句话：压缩要在保留\textbf{决策、约束、失败和来源}的前提下，提高信息密度。
+\end{tcolorbox}
+另外，已经写进文件的输出（见 4.3），压缩时丢掉也能再读回来；只存在于上下文里的输出，丢了就真没了。
+
+\subsection{隔离优于压缩：子 Agent}
+压缩是信息已经进了上下文，再事后做减法。更彻底的办法是让大量中间内容根本不进主上下文。
+主 Agent 把会产生大量中间内容的任务（比如在整个代码库里搜索），交给一个独立的子 Agent。子 Agent 在自己的上下文里摸索，最后只把几百 token 的结论交回来。
+\begin{table}[H]
+\centering
+\caption{主 Agent 自己搜 vs 委派给子 Agent}
+\label{tab:subagent-isolation}
+\begin{tabular}{p{3.0cm} p{6.0cm} p{5.6cm}}
+  \toprule
+   & \textbf{主 Agent 自己搜} & \textbf{委派给子 Agent} \\
+  \midrule
+  主上下文增加什么 &
+    十几个文件、几万 token 的原始代码 &
+    \textbf{两条消息}：一条任务描述，一条结论 \\
+  \addlinespace
+  中间内容 &
+    找到之后大部分变成噪声，一直占着窗口，还要靠后面压缩清理 &
+    跟着子 Agent 的上下文一起丢掉 \\
+  \addlinespace
+  主 Agent 的缓存 &
+    被大量内容撑长 &
+    前缀完全不受影响 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+\textbf{隔离的代价:}子 Agent 看不到主 Agent 知道的东西，所以任务描述必须自包含、目标明确。
+\subsection{Agent 状态栏：把关键状态单独留住}
+\begin{definition}{状态栏}
+  Agent 框架把运行时的关键状态整理成一小段结构化摘要，追加在上下文末尾，让模型每次生成前都能“瞥一眼”。
+\end{definition}
+
+\keypoint{为什么需要}
+还是“注意力擅长查，不擅长数”。例如规定每个商家最多打 3 次电话，Agent 打完 3 次后经常数不清，又打第 4 次。因为“已经打了几次”只散落在原始通话记录里，每次都得重数；如果在工具结果里直接写上“本次是第 3 次呼叫该商家”，模型立刻就知道到上限了。
+\begin{tcolorbox}[enhanced, sharp corners, boxrule=0pt, frame hidden,
+                  borderline west={3pt}{0pt}{structurecolor},
+                  colback=structurecolor!5]
+状态栏的本质：把散落在上下文各处的隐式状态，提炼成可以直接使用的显式知识。
+\end{tcolorbox}
+另外，放在末尾的信息离即将生成的 token 最近，更容易得到注意力；早期设定的目标和约束则容易被后来的大量工具结果淹没。有了状态栏，小模型也能稳定遵守约束，每次迭代的思考 token 和花费大幅下降。
+
+\keypoint{里面放什么}
+\begin{enumerate}
+  \item \textbf{任务规划：}TODO 列表，提醒原始诉求、核心约束和还剩什么没做；
+  \item \textbf{事件的附加信息：}精确时间、距上次回复的间隔等；
+  \item \textbf{环境状态摘要：}当前时间、工作目录，以及异常提醒（如“该工具已被重复调用 $N$ 次”）。
+\end{enumerate}
+
+状态栏作为\textbf{一条 user 消息追加在上下文末尾}，用 \texttt{<agent\_status>} 这样的标签包起来，而不是修改开头的 system 消息：改 system 会让整段缓存失效，追加不会。这里只是借用 user 的消息位置，内容并不是用户说的，所以要用标签标明。
+
+\keypoint{状态变了怎么更新}
+\begin{table}[H]
+\centering
+\caption{状态栏的两种更新方式}
+\label{tab:status-update}
+\begin{tabular}{p{2.0cm} p{6.2cm} p{6.4cm}}
+  \toprule
+   & \textbf{每轮替换} & \textbf{持久追加} \\
+  \midrule
+  做法 & 删掉上一轮的状态消息，在末尾追加新的 & 旧状态留着，每轮在末尾再追加一条 \\
+  \addlinespace
+  缓存 & 删除位置之后失效，通常只影响一轮 & 完全友好，只追加不修改 \\
+  \addlinespace
+  代价 & 每轮重算一小段 & 旧状态越积越多，模型要认准最新那条 \\
+  \bottomrule
+\end{tabular}
+\end{table}
+状态小、两次更新之间新增的消息多，选持久追加；状态大、更新频繁，选每轮替换。
+
+\keypoint{两条注意}
+\begin{enumerate}
+  \item \textbf{状态栏要用代码维护：}模型几乎无条件相信状态栏，写“打了 3 次”它就当真，不会自己再数。所以计数不能交给模型统计，也要提防状态栏被投毒。
+  \item \textbf{谨慎删除原始上下文：}状态栏只算好了预想会被问到的维度；问题一旦涉及没算的维度，而原始记录已经删了，准确率会断崖式下降。
+\end{enumerate}
+状态栏也是一种上下文压缩：状态栏把算好的结论\textbf{加}进上下文，压缩把原始记录\textbf{换}成算好的结论，是同一枚硬币的两面。
+
+
