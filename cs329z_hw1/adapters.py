@@ -40,6 +40,7 @@ from cs329z_hw1.types import (
     ToolSpec
 )
 from cs329z_hw1.pipelines import priority, digest,bm25,email_qa
+from cs329z_hw1.agent import registry
 # ======================================================================
 # Part 1: LLM pipelines
 # ======================================================================
@@ -171,8 +172,7 @@ def run_tool_registry(tools: list[ToolSpec]) -> Any:
       ``fn(**args)``: status "ok", ``content == str(return value)``.
     * The registry keeps working after any of these outcomes.
     """
-    raise NotImplementedError
-
+    return registry.ToolRegistry(tools)
 
 def run_render_tools(schemas: list[dict]) -> str:
     """Problem (tool_protocol).
